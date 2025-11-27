@@ -1,0 +1,8 @@
+com\exam\web\WeatherAjaxServlet.class
+com\exam\web\ConnectionCounterServer.class
+com\exam\web\WeatherRestClient.class
+com\exam\web\GeoRefServlet.class
+com\exam\weather\WeatherServer.class
+com\exam\weather\WeatherServer$WeatherHandler.class
+com\exam\weather\WeatherService.class
+com\exam\web\WeatherRestClient$LocationData.class
