@@ -2,189 +2,232 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <title>Buscador de Clima - Distribuido</title>
-    <style>
-        body { font-family: 'Segoe UI', sans-serif; padding: 20px; background-color: #f0f2f5; }
-        .container { max-width: 900px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
-
-        .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #eee; padding-bottom: 10px; margin-bottom: 20px;}
-        .user-count { background: #27ae60; color: white; padding: 5px 15px; border-radius: 20px; font-weight: bold; font-size: 0.9em; }
-
-        .form-group { margin-bottom: 15px; }
-        label { display: block; margin-bottom: 5px; font-weight: bold; }
-        select, button { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 5px; font-size: 16px; }
-        button { background-color: #3498db; color: white; border: none; cursor: pointer; margin-top: 10px; }
-        button:hover { background-color: #2980b9; }
-        button:disabled { background-color: #bdc3c7; }
-
-        /* Overlay de Bloqueo */
-        #overlay-blocked {
-            display: none; /* Oculto por defecto */
-            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background-color: rgba(0,0,0,0.95);
-            z-index: 1000;
-            color: white;
-            text-align: center;
-            flex-direction: column;
-            justify-content: center;
-            align-items: center;
-        }
-        .loader { border: 5px solid #f3f3f3; border-top: 5px solid #e74c3c; border-radius: 50%; width: 50px; height: 50px; animation: spin 1s linear infinite; margin-bottom: 20px; }
-        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-
-        .weather-table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-        .weather-table th, .weather-table td { border: 1px solid #ddd; padding: 8px; }
-        .weather-table th { background-color: #2c3e50; color: white; }
-    </style>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Clima Distribuido | Live Monitor</title>
+    <!-- Importamos fuente moderna 'Poppins' -->
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600&display=swap" rel="stylesheet">
+    <!-- Vinculamos la hoja de estilos externa -->
+    <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 
-<!-- Overlay de Bloqueo -->
+<!-- Overlay de Bloqueo Moderno -->
 <div id="overlay-blocked">
-    <div class="loader"></div>
-    <h2 id="block-msg">Servidor Lleno</h2>
-    <p>Esperando que se libere un cupo...</p>
-    <p style="font-size: 0.8em; color: #ccc">Reintentando en 5 segundos...</p>
+    <div class="loader-ring"></div>
+    <h2 style="margin-bottom: 10px; font-weight: 600;">Servidor Saturado</h2>
+    <p style="opacity: 0.8; margin-bottom: 20px;">Estamos experimentando alta demanda.</p>
+    <div style="background: rgba(255,255,255,0.1); padding: 8px 15px; border-radius: 20px; font-size: 0.85rem;">
+        Reintentando conexión automática en <span id="retry-counter">5</span>s...
+    </div>
 </div>
 
 <div class="container">
     <div class="header">
-        <h1>Consulta Meteorológica</h1>
-        <div class="user-count">Usuarios en línea: <span id="countDisplay">--</span></div>
+        <h1>Clima Distribuido</h1>
+        <div class="user-badge">
+            <div class="status-dot"></div>
+            <span id="countDisplay">--</span> online
+        </div>
     </div>
 
-    <div class="form-group">
-        <label for="provincia">Provincia:</label>
-        <select id="provincia"><option value="">Cargando...</option></select>
+    <div class="controls-grid">
+        <div class="input-group">
+            <label for="provincia">Provincia</label>
+            <select id="provincia">
+                <option value="">Cargando provincias...</option>
+            </select>
+        </div>
+
+        <div class="input-group">
+            <label for="localidad">Localidad (Opcional)</label>
+            <select id="localidad" disabled>
+                <option value="">Seleccione provincia primero</option>
+            </select>
+        </div>
     </div>
 
-    <div class="form-group">
-        <label for="localidad">Localidad:</label>
-        <select id="localidad" disabled><option value="">Seleccione provincia</option></select>
-    </div>
+    <button id="btnConsultar">
+        <span style="margin-right: 8px;">🔍</span> Consultar Tiempo Real
+    </button>
 
-    <button id="btnConsultar">Consultar Clima</button>
-    <div id="resultado"></div>
+    <div id="resultado">
+        <!-- Aquí se inyecta la tabla -->
+    </div>
 </div>
 
 <script>
-    // --- VARIABLES GLOBALES ---
+    // --- LÓGICA DE INTERFAZ Y WEBSOCKET ---
+
     const overlay = document.getElementById('overlay-blocked');
     const countDisplay = document.getElementById('countDisplay');
-    let socket = null;
-    let reconnectTimer = null; // ID del timer para poder cancelarlo
+    const statusDot = document.querySelector('.status-dot');
+    const retryCounter = document.getElementById('retry-counter');
 
-    // --- LÓGICA WEBSOCKET ROBUSTA ---
+    let socket = null;
+    let reconnectTimer = null;
+    let countdownInterval = null;
+
+    function updateStatus(color) {
+        statusDot.style.backgroundColor = color;
+        statusDot.style.boxShadow = `0 0 8px ${color}`;
+    }
+
     function connectWebSocket() {
-        // 1. Limpieza previa: si ya hay socket o timer, matarlos
         if (socket) {
-            socket.onclose = null; // Desvincular evento para evitar loops
+            socket.onclose = null;
             socket.close();
         }
-        if (reconnectTimer) {
-            clearTimeout(reconnectTimer);
-            reconnectTimer = null;
-        }
+        clearReconnectionTimers();
 
-        // 2. Construir URL
+        // Detectar protocolo y path automáticamente
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        // Ajusta '/clima-web' o '/app' según tu contexto real. Aquí uso detección automática:
         const path = window.location.pathname.substring(0, window.location.pathname.indexOf('/', 1));
         const wsUrl = `${protocol}//${window.location.host}${path}/ws/contador`;
 
-        console.log("Conectando a WS:", wsUrl);
+        console.log("Conectando WS:", wsUrl);
         socket = new WebSocket(wsUrl);
 
-        // 3. EVENTO: Conexión Exitosa
         socket.onopen = function() {
-            console.log(">>> Conectado al Servidor (Cupo disponible)");
-            // Ocultar bloqueo inmediatamente
+            console.log(">>> Conexión establecida");
             overlay.style.display = 'none';
+            updateStatus('#48bb78'); // Verde
         };
 
-        // 4. EVENTO: Mensaje Recibido
         socket.onmessage = function(event) {
             const msg = event.data;
             if (msg === "BLOCKED") {
-                console.warn(">>> Servidor dice: BLOQUEADO");
-                // El servidor nos va a cerrar la conexión acto seguido.
-                // Mostramos el bloqueo aquí para que sea inmediato.
                 triggerBlockScreen();
             } else if (msg.startsWith("COUNT:")) {
                 countDisplay.textContent = msg.split(":")[1];
             }
         };
 
-        // 5. EVENTO: Cierre de Conexión
         socket.onclose = function(event) {
-            console.log("Socket cerrado. Razón:", event.code);
-            // Si se cerró (ya sea por BLOCKED del server o caída de red), reintentamos.
+            updateStatus('#f56565'); // Rojo
+            console.warn("Socket cerrado:", event.code);
             triggerBlockScreen();
         };
 
-        // 6. EVENTO: Error
         socket.onerror = function(err) {
             console.error("Error socket:", err);
-            socket.close(); // Esto disparará onclose
+            socket.close();
         };
     }
 
     function triggerBlockScreen() {
-        // Mostrar overlay
         overlay.style.display = 'flex';
+        updateStatus('#f56565');
 
-        // Evitar múltiples timers corriendo a la vez
         if (!reconnectTimer) {
-            console.log("Programando reintento en 5s...");
+            let secondsLeft = 5;
+            retryCounter.textContent = secondsLeft;
+
+            // Cuenta regresiva visual
+            countdownInterval = setInterval(() => {
+                secondsLeft--;
+                retryCounter.textContent = secondsLeft;
+                if (secondsLeft <= 0) clearInterval(countdownInterval);
+            }, 1000);
+
             reconnectTimer = setTimeout(() => {
-                reconnectTimer = null; // Reset variable
-                connectWebSocket();    // Reintentar
+                reconnectTimer = null;
+                connectWebSocket();
             }, 5000);
         }
     }
 
-    // Iniciar al cargar la página
-    connectWebSocket();
+    function clearReconnectionTimers() {
+        if (reconnectTimer) {
+            clearTimeout(reconnectTimer);
+            reconnectTimer = null;
+        }
+        if (countdownInterval) {
+            clearInterval(countdownInterval);
+            countdownInterval = null;
+        }
+    }
 
+    // --- LÓGICA DE NEGOCIO (IGUAL AL ORIGINAL) ---
 
-    // --- LÓGICA DE NEGOCIO (Selects y Ajax) ---
     const selProvincia = document.getElementById('provincia');
     const selLocalidad = document.getElementById('localidad');
     const btnConsultar = document.getElementById('btnConsultar');
     const divResultado = document.getElementById('resultado');
 
     document.addEventListener('DOMContentLoaded', () => {
+        connectWebSocket(); // Iniciar WS
+
         fetch('api/geo?type=provincias')
             .then(res => res.json())
-            .then(data => populateSelect(selProvincia, data.provincias, 'Seleccione provincia'))
-            .catch(e => console.error("Error API GeoRef", e));
+            .then(data => populateSelect(selProvincia, data.provincias, 'Seleccione una provincia'))
+            .catch(e => {
+                console.error("Error API GeoRef", e);
+                selProvincia.innerHTML = '<option>Error al cargar API</option>';
+            });
     });
 
     selProvincia.addEventListener('change', () => {
         const prov = selProvincia.value;
-        selLocalidad.innerHTML = '<option>Cargando...</option>'; selLocalidad.disabled = true;
-        if(prov) fetch(`api/geo?type=localidades&prov=${encodeURIComponent(prov)}`)
-            .then(res=>res.json()).then(d=>{ populateSelect(selLocalidad, d.localidades, 'Todas'); selLocalidad.disabled=false;});
+        selLocalidad.innerHTML = '<option>Cargando...</option>';
+        selLocalidad.disabled = true;
+
+        if(prov) {
+            fetch(`api/geo?type=localidades&prov=${encodeURIComponent(prov)}`)
+                .then(res => res.json())
+                .then(d => {
+                    populateSelect(selLocalidad, d.localidades, 'Todas las localidades (Opcional)');
+                    selLocalidad.disabled = false;
+                });
+        } else {
+            selLocalidad.innerHTML = '<option value="">Seleccione provincia primero</option>';
+        }
     });
 
     btnConsultar.addEventListener('click', () => {
         const prov = selProvincia.value;
         const loc = selLocalidad.value;
-        if(!prov) return alert("Seleccione provincia");
 
-        divResultado.innerHTML = 'Consultando backend...';
+        if(!prov) {
+            // Animación de "shake" si falta input
+            selProvincia.style.borderColor = '#f56565';
+            setTimeout(() => selProvincia.style.borderColor = '#e2e8f0', 500);
+            return;
+        }
+
+        // Feedback de carga en el botón
+        const originalText = btnConsultar.innerHTML;
+        btnConsultar.innerHTML = '⏳ Buscando...';
+        btnConsultar.disabled = true;
+        divResultado.style.opacity = '0.5';
+
         let url = `api/weather-table?provincia=${encodeURIComponent(prov)}`;
         if(loc) url += `&localidad=${encodeURIComponent(loc)}`;
 
-        fetch(url).then(r=>r.text()).then(h => divResultado.innerHTML = h);
+        fetch(url)
+            .then(r => r.text())
+            .then(html => {
+                divResultado.innerHTML = html;
+                divResultado.style.opacity = '1';
+                btnConsultar.innerHTML = originalText;
+                btnConsultar.disabled = false;
+            })
+            .catch(err => {
+                divResultado.innerHTML = `<div style="color:var(--error-color); text-align:center; margin-top:20px;">Error de conexión con el Backend</div>`;
+                btnConsultar.innerHTML = originalText;
+                btnConsultar.disabled = false;
+            });
     });
 
     function populateSelect(sel, items, def) {
         sel.innerHTML = `<option value="">${def}</option>`;
         items.forEach(i => {
-            let o = document.createElement('option'); o.value=i.nombre; o.textContent=i.nombre; sel.appendChild(o);
+            let o = document.createElement('option');
+            o.value = i.nombre;
+            o.textContent = i.nombre;
+            sel.appendChild(o);
         });
     }
+
 </script>
 
 </body>
