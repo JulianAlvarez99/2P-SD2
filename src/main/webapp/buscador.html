@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Buscador de Clima - Distribuido</title>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; padding: 20px; background-color: #f0f2f5; }
+        .container { max-width: 900px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+
+        .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #eee; padding-bottom: 10px; margin-bottom: 20px;}
+        .user-count { background: #27ae60; color: white; padding: 5px 15px; border-radius: 20px; font-weight: bold; font-size: 0.9em; }
+
+        .form-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; font-weight: bold; }
+        select, button { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 5px; font-size: 16px; }
+        button { background-color: #3498db; color: white; border: none; cursor: pointer; margin-top: 10px; }
+        button:hover { background-color: #2980b9; }
+        button:disabled { background-color: #bdc3c7; }
+
+        /* Overlay de Bloqueo */
+        #overlay-blocked {
+            display: none; /* Oculto por defecto */
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background-color: rgba(0,0,0,0.95);
+            z-index: 1000;
+            color: white;
+            text-align: center;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+        }
+        .loader { border: 5px solid #f3f3f3; border-top: 5px solid #e74c3c; border-radius: 50%; width: 50px; height: 50px; animation: spin 1s linear infinite; margin-bottom: 20px; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+        .weather-table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        .weather-table th, .weather-table td { border: 1px solid #ddd; padding: 8px; }
+        .weather-table th { background-color: #2c3e50; color: white; }
+    </style>
+</head>
+<body>
+
+<!-- Overlay de Bloqueo -->
+<div id="overlay-blocked">
+    <div class="loader"></div>
+    <h2 id="block-msg">Servidor Lleno</h2>
+    <p>Esperando que se libere un cupo...</p>
+    <p style="font-size: 0.8em; color: #ccc">Reintentando en 5 segundos...</p>
+</div>
+
+<div class="container">
+    <div class="header">
+        <h1>Consulta Meteorológica</h1>
+        <div class="user-count">Usuarios en línea: <span id="countDisplay">--</span></div>
+    </div>
+
+    <div class="form-group">
+        <label for="provincia">Provincia:</label>
+        <select id="provincia"><option value="">Cargando...</option></select>
+    </div>
+
+    <div class="form-group">
+        <label for="localidad">Localidad:</label>
+        <select id="localidad" disabled><option value="">Seleccione provincia</option></select>
+    </div>
+
+    <button id="btnConsultar">Consultar Clima</button>
+    <div id="resultado"></div>
+</div>
+
+<script>
+    // --- VARIABLES GLOBALES ---
+    const overlay = document.getElementById('overlay-blocked');
+    const countDisplay = document.getElementById('countDisplay');
+    let socket = null;
+    let reconnectTimer = null; // ID del timer para poder cancelarlo
+
+    // --- LÓGICA WEBSOCKET ROBUSTA ---
+    function connectWebSocket() {
+        // 1. Limpieza previa: si ya hay socket o timer, matarlos
+        if (socket) {
+            socket.onclose = null; // Desvincular evento para evitar loops
+            socket.close();
+        }
+        if (reconnectTimer) {
+            clearTimeout(reconnectTimer);
+            reconnectTimer = null;
+        }
+
+        // 2. Construir URL
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        // Ajusta '/clima-web' o '/app' según tu contexto real. Aquí uso detección automática:
+        const path = window.location.pathname.substring(0, window.location.pathname.indexOf('/', 1));
+        const wsUrl = `${protocol}//${window.location.host}${path}/ws/contador`;
+
+        console.log("Conectando a WS:", wsUrl);
+        socket = new WebSocket(wsUrl);
+
+        // 3. EVENTO: Conexión Exitosa
+        socket.onopen = function() {
+            console.log(">>> Conectado al Servidor (Cupo disponible)");
+            // Ocultar bloqueo inmediatamente
+            overlay.style.display = 'none';
+        };
+
+        // 4. EVENTO: Mensaje Recibido
+        socket.onmessage = function(event) {
+            const msg = event.data;
+            if (msg === "BLOCKED") {
+                console.warn(">>> Servidor dice: BLOQUEADO");
+                // El servidor nos va a cerrar la conexión acto seguido.
+                // Mostramos el bloqueo aquí para que sea inmediato.
+                triggerBlockScreen();
+            } else if (msg.startsWith("COUNT:")) {
+                countDisplay.textContent = msg.split(":")[1];
+            }
+        };
+
+        // 5. EVENTO: Cierre de Conexión
+        socket.onclose = function(event) {
+            console.log("Socket cerrado. Razón:", event.code);
+            // Si se cerró (ya sea por BLOCKED del server o caída de red), reintentamos.
+            triggerBlockScreen();
+        };
+
+        // 6. EVENTO: Error
+        socket.onerror = function(err) {
+            console.error("Error socket:", err);
+            socket.close(); // Esto disparará onclose
+        };
+    }
+
+    function triggerBlockScreen() {
+        // Mostrar overlay
+        overlay.style.display = 'flex';
+
+        // Evitar múltiples timers corriendo a la vez
+        if (!reconnectTimer) {
+            console.log("Programando reintento en 5s...");
+            reconnectTimer = setTimeout(() => {
+                reconnectTimer = null; // Reset variable
+                connectWebSocket();    // Reintentar
+            }, 5000);
+        }
+    }
+
+    // Iniciar al cargar la página
+    connectWebSocket();
+
+
+    // --- LÓGICA DE NEGOCIO (Selects y Ajax) ---
+    const selProvincia = document.getElementById('provincia');
+    const selLocalidad = document.getElementById('localidad');
+    const btnConsultar = document.getElementById('btnConsultar');
+    const divResultado = document.getElementById('resultado');
+
+    document.addEventListener('DOMContentLoaded', () => {
+        fetch('api/geo?type=provincias')
+            .then(res => res.json())
+            .then(data => populateSelect(selProvincia, data.provincias, 'Seleccione provincia'))
+            .catch(e => console.error("Error API GeoRef", e));
+    });
+
+    selProvincia.addEventListener('change', () => {
+        const prov = selProvincia.value;
+        selLocalidad.innerHTML = '<option>Cargando...</option>'; selLocalidad.disabled = true;
+        if(prov) fetch(`api/geo?type=localidades&prov=${encodeURIComponent(prov)}`)
+            .then(res=>res.json()).then(d=>{ populateSelect(selLocalidad, d.localidades, 'Todas'); selLocalidad.disabled=false;});
+    });
+
+    btnConsultar.addEventListener('click', () => {
+        const prov = selProvincia.value;
+        const loc = selLocalidad.value;
+        if(!prov) return alert("Seleccione provincia");
+
+        divResultado.innerHTML = 'Consultando backend...';
+        let url = `api/weather-table?provincia=${encodeURIComponent(prov)}`;
+        if(loc) url += `&localidad=${encodeURIComponent(loc)}`;
+
+        fetch(url).then(r=>r.text()).then(h => divResultado.innerHTML = h);
+    });
+
+    function populateSelect(sel, items, def) {
+        sel.innerHTML = `<option value="">${def}</option>`;
+        items.forEach(i => {
+            let o = document.createElement('option'); o.value=i.nombre; o.textContent=i.nombre; sel.appendChild(o);
+        });
+    }
+</script>
+
+</body>
+</html>
